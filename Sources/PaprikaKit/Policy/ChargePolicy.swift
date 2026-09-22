@@ -384,7 +384,19 @@ public enum ChargePolicy {
             }
         }
 
-        session.chargingAllowedLatch = (finalDecision.action == .allowCharging || finalDecision.action == .unmanaged)
+        // 히스테리시스 래치는 **전원이 연결된 동안에만** 갱신한다.
+        //
+        // 왜: 전원이 빠지면 판단은 항상 .allowCharging(onBattery) 이다(하드웨어를
+        // 허용 상태로 둬서 다시 꽂는 순간 바로 충전되게 하려고). 그때 래치까지
+        // true 로 바꿔버리면 "상한에 이미 도달했다"는 기억이 지워진다.
+        //
+        // 그러면 예컨대 상한 80 / 히스테리시스 10 에서 잠깐 뽑아 74% 까지 쓰고 다시
+        // 꽂았을 때, 70% 아래로 내려가길 기다리지 않고 80% 까지 다시 충전한다.
+        // 사이클을 아끼려고 만든 기능이 뽑았다 꽂는 것만으로 무력화되는 셈이다.
+        // (이 문제는 폐루프 시뮬레이션에서 발견했다 — Verification/Simulation.swift)
+        if inputs.isPluggedIn {
+            session.chargingAllowedLatch = (finalDecision.action == .allowCharging || finalDecision.action == .unmanaged)
+        }
         return PolicyResult(decision: finalDecision, session: session, events: events)
     }
 

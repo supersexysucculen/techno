@@ -56,6 +56,14 @@ run: ## 앱 실행 (번들이 없으면 먼저 만든다)
 	@test -d "$(APP)" || ./Scripts/build.sh
 	open "$(APP)"
 
+.PHONY: verify
+verify: ## 검증 하니스 실행 (맥 없이도 동작, 약 3초)
+	./Scripts/verify.sh
+
+.PHONY: verify-verbose
+verify-verbose: ## 검증 하니스 실행 + 통과한 단정까지 전부 출력
+	./Scripts/verify.sh --verbose
+
 .PHONY: check
 check: ## 도우미 없이 SMC 지원 여부만 확인 (sudo)
 	swift build -c release

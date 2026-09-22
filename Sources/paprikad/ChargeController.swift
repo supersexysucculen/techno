@@ -258,110 +258,31 @@ final class ChargeController {
 
     // MARK: - SMC 반영
 
-    private struct ApplyOutcome {
-        var changed: Bool = false
-        var error: String?
-    }
-
-    private func applyToHardware(decision: ChargeDecision) -> ApplyOutcome {
+    /// 판단을 하드웨어에 옮긴다.
+    ///
+    /// 실제 매핑 로직은 PaprikaKit 의 ChargeApplier 에 있다. 여기서 직접 하지 않는
+    /// 이유는, 그 코드가 틀리면 충전이 영구히 막히는 가장 위험한 부분이라서
+    /// 맥 없이도 실행 검증이 가능한 곳에 두었기 때문이다. (Verification/ 참고)
+    private func applyToHardware(decision: ChargeDecision) -> ChargeApplyResult {
         guard let hardware else {
-            return ApplyOutcome(changed: false, error: L.s("SMC 연결이 없습니다.", "No SMC connection."))
+            return ChargeApplyResult(
+                changed: false,
+                error: L.s("SMC 연결이 없습니다.", "No SMC connection.")
+            )
         }
 
-        var outcome = ApplyOutcome()
-        let capabilities = hardware.capabilities
-        guard capabilities.isUsable else { return outcome }
+        let result = ChargeApplier.apply(
+            decision: decision,
+            hardware: hardware,
+            controlMagSafeLED: state.config.controlMagSafeLED
+        )
 
-        /// 어댑터 제어 키가 있을 때만 어댑터 상태를 건드린다.
-        func setAdapter(_ enabled: Bool) throws {
-            guard capabilities.supportsAdapterControl else { return }
-            if try hardware.setAdapter(enabled: enabled) { outcome.changed = true }
-        }
-
-        func setCharging(_ allowed: Bool) throws {
-            if try hardware.setCharging(allowed: allowed) { outcome.changed = true }
-        }
-
-        func setFirmwareRange(_ decision: ChargeDecision) throws {
-            let upper = decision.effectiveTarget
-            let lower = min(max(0, decision.effectiveResumeThreshold), upper - 1)
-            if try hardware.setFirmwareLimit(lower: lower, upper: upper) { outcome.changed = true }
-        }
-
-        func clearFirmwareLimit() throws {
-            if try hardware.disableFirmwareLimit() { outcome.changed = true }
-        }
-
-        do {
-            switch capabilities.backend {
-            case .classicLegacy, .tahoeLegacy:
-                // 펌웨어 제한이 동시에 걸려 있으면 서로 싸운다. 직접 제어할 때는 끈다.
-                if capabilities.hasFirmwareLimitKeys {
-                    try clearFirmwareLimit()
-                }
-
-                switch decision.action {
-                case .allowCharging, .unmanaged:
-                    try setAdapter(true)
-                    try setCharging(true)
-
-                case .inhibitCharging:
-                    try setAdapter(true)
-                    try setCharging(false)
-
-                case .forceDischarge:
-                    try setCharging(false)
-                    try setAdapter(false)
-                }
-
-            case .firmware:
-                // 펌웨어가 히스테리시스까지 관리하므로 범위만 알려주면 된다.
-                switch decision.action {
-                case .unmanaged:
-                    try clearFirmwareLimit()
-                    try setAdapter(true)
-
-                // 상한이 100 이면 제한을 걸 이유가 없다(방전 요청은 아래에서 따로 본다).
-                case .allowCharging where decision.effectiveTarget >= 100,
-                     .inhibitCharging where decision.effectiveTarget >= 100:
-                    try clearFirmwareLimit()
-                    try setAdapter(true)
-
-                case .allowCharging, .inhibitCharging:
-                    try setFirmwareRange(decision)
-                    try setAdapter(true)
-
-                case .forceDischarge:
-                    try setFirmwareRange(decision)
-                    try setAdapter(false)
-                }
-
-            case .unsupported:
-                break
-            }
-
-            if state.config.controlMagSafeLED, capabilities.hasMagSafeLED {
-                let ledState = magSafeState(for: decision.action)
-                if try hardware.setMagSafeLED(ledState) { outcome.changed = true }
-            }
-
+        if let error = result.error {
+            recordError(error, kind: .hardwareError)
+        } else {
             clearError()
-        } catch {
-            let text = String(describing: error)
-            outcome.error = text
-            recordError(text, kind: .hardwareError)
         }
-
-        return outcome
-    }
-
-    private func magSafeState(for action: ChargeAction) -> MagSafeLEDState {
-        switch action {
-        case .allowCharging: return .orange
-        case .inhibitCharging: return .green
-        case .forceDischarge: return .off
-        case .unmanaged: return .system
-        }
+        return result
     }
 
     // MARK: - 스냅샷

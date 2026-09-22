@@ -67,24 +67,42 @@ paprikad     (LaunchDaemon, root)  ──SMC 쓰기──▶  AppleSMC
 
 ### 소스 지도
 
+파일 배치에는 규칙이 하나 있다: **플랫폼(IOKit/AppKit)에 의존하는 코드와 그렇지 않은
+코드를 같은 파일에 섞지 않는다.** 아래 표의 ◆ 표시가 플랫폼 독립 파일이고, 그것들만
+모아서 맥 없이도 실제로 실행·검증한다(`make verify`).
+
 ```
 Sources/
-  PaprikaKit/              앱·데몬·CLI 공용
-    SMC/SMCConnection.swift    AppleSMC IOKit 저수준 (80바이트 ABI 구조체)
-    SMC/SMCKeys.swift          충전 제어 SMC 키 정의
-    Hardware/ChargeHardware.swift   "충전 허용/차단" 수준으로 감싼 계층 + 기능 탐지
-    Battery/BatteryReader.swift     AppleSmartBattery IORegistry 파싱
-    Policy/ChargePolicy.swift       ★ 순수 함수 정책 엔진 (IO 없음)
-    Policy/PaprikaConfig.swift      설정 / 세션 상태 / 캘리브레이션 상태
-    IPC/                       XPC 프로토콜 · 스냅샷 · 클라이언트
-  paprikad/                데몬 (제어 루프, XPC 서버, 피어 검증, 절전 감시)
-  Paprika/                 메뉴바 앱 (SwiftUI)
-    Views/PepperGeometry.swift  파프리카 실루엣 CGPath (아이콘/게이지 공용)
-  paprikactl/              진단용 CLI
+  PaprikaKit/                        앱·데몬·CLI 공용
+  ◆ SMC/SMCParamStruct.swift           커널 ABI 80바이트 구조체
+  ◆ SMC/SMCValue.swift                 값·오류 타입, 엔디언 디코딩
+  ◆ SMC/SMCAccess.swift                SMC 접근 프로토콜 ← 검증용 이음새
+    SMC/SMCConnection.swift            실제 IOKit 연결 (SMCAccess 구현)
+  ◆ SMC/SMCKeys.swift                  충전 제어 키 정의 + 기대 폭
+  ◆ Hardware/ChargeHardware.swift      "충전 허용/차단" 계층 + 기능 탐지
+  ◆ Hardware/ChargeApplier.swift       ★ 판단 → SMC 상태 매핑 (가장 위험한 코드)
+  ◆ Battery/BatteryPropertyParser.swift 배터리 속성 해석 (순수 함수)
+    Battery/BatteryReader.swift        IORegistry 에서 속성 꺼내오기
+  ◆ Policy/ChargePolicy.swift          ★ 순수 함수 정책 엔진 (IO 없음)
+  ◆ Policy/PaprikaConfig.swift         설정 / 세션 / 캘리브레이션 상태
+    IPC/                               XPC 프로토콜 · 스냅샷 · 클라이언트
+  paprikad/                          데몬 (제어 루프, XPC 서버, 피어 검증, 절전 감시)
+  Paprika/                           메뉴바 앱 (SwiftUI)
+    Views/PepperGeometry.swift         파프리카 실루엣 CGPath (아이콘/게이지 공용)
+  paprikactl/                        진단용 CLI
+
+Verification/                        검증 하니스 (Scripts/verify.sh 로 실행)
+  FakeSMC.swift                        메모리상의 가짜 SMC + 기기 프로파일 6종
+  Simulation.swift                     폐루프 시뮬레이션 (정책+적용을 이어서 돌림)
+  Shims.swift                          os.Logger / sysctl 대체 (이 둘만)
 ```
 
-핵심 로직을 읽고 싶다면 **`Sources/PaprikaKit/Policy/ChargePolicy.swift`** 하나만
-보면 된다. IO 를 전혀 하지 않는 순수 함수이고, 판단 순서가 주석에 적혀 있다.
+핵심 로직을 읽고 싶다면 두 파일만 보면 된다:
+
+- **`Policy/ChargePolicy.swift`** — "지금 충전할까?"를 결정한다. IO 를 전혀 하지 않는
+  순수 함수이고, 판단 순서가 주석에 적혀 있다.
+- **`Hardware/ChargeApplier.swift`** — 그 결정을 실제 SMC 값으로 옮긴다. 백엔드별로
+  무엇이 다른지가 여기 다 있다.
 
 ---
 
@@ -253,31 +271,102 @@ log stream --predicate 'subsystem == "com.paprika"' --level info
 이 코드는 **리눅스 환경에서 작성되었고, 맥에서 컴파일된 적이 없다.** 그래서 무엇을
 확인했고 무엇을 못 했는지 분명히 적어둔다.
 
+```bash
+make verify          # 약 3초. 맥에서도 리눅스에서도 돌아간다.
+make verify-verbose  # 통과한 단정까지 전부 출력
+```
+
+```
+검사 지점(단정)   : 454개  (통과 454 / 실패 0)
+개별 케이스       : 700,264개
+시뮬레이션 tick   : 27,700회
+검사 총 횟수      : 728,418회
+```
+
+### 어떻게 맥 없이 하드웨어 코드를 검증하나
+
+충전을 켜고 끄는 코드는 틀리면 "충전이 영구히 막힘"이 되는, 이 앱에서 가장 위험한
+부분이다. 그런데 그게 IOKit 에 직접 붙어 있으면 맥 밖에서 한 줄도 실행할 수 없다.
+
+그래서 이음새를 하나 뒀다:
+
+```
+ChargeHardware  ──▶  SMCAccess (프로토콜)
+                        ├── SMCConnection  (실제 앱: IOKit)
+                        └── FakeSMC        (검증: 메모리상의 가짜 SMC)
+```
+
+`ChargeHardware` 와 `ChargeApplier` 는 프로토콜만 알기 때문에, 검증 하니스가 가짜
+SMC 를 끼워서 **앱에 실제로 들어가는 그 코드**를 수십만 번 돌린다. 대체한 것은
+`os.Logger` 와 `sysctl` 두 개뿐이다(`Verification/Shims.swift`).
+
+`Scripts/verify.sh` 의 파일 목록이 "맥 없이 검증 가능한 범위"의 정의다.
+
 ### 확인한 것
 
-| 대상 | 방법 | 결과 |
+| 대상 | 방법 | 규모 |
 |---|---|---|
-| 전체 Swift 파일 문법 | `swiftc -parse` | 통과 |
-| 정책 엔진 동작 | 리눅스에서 실제 실행, 65개 단정 | 통과 |
-| SMC 커널 ABI 80바이트 레이아웃 | 메모리에서 필드 오프셋 직접 확인 | `key@0 keyInfo@28 result@40 status@41 data8@42 data32@44`, size·stride 80 |
-| `SMCValue` 엔디언 처리 | `ui32` LE, `sp78` BE, `flt ` LE 값 비교 | 통과 |
-| `smcFourCharCode` 왕복 | `CH0B`/`bfF0`/`AC-W`/`#KEY` | 통과 |
-| `BatteryReader.parse` | Apple Silicon·인텔·빈 딕셔너리 형태 | 통과 (건강도 94.0%, 30.55°C 등) |
-| `PaprikaConfig.sanitized()` 경계값 | 단정 | 통과 |
-| 셸 스크립트 문법 | `bash -n` | 통과 |
-| plist 유효성 | `plistlib` 파싱 | 통과 |
-| 코드 리뷰 | 독립 리뷰 1회 → 지적 사항 반영 | 아래 참고 |
+| 커널 ABI 80바이트 레이아웃 | 메모리에서 필드 오프셋 직접 측정 | `key@0 keyInfo@28 result@40 status@41 data8@42 data32@44 bytes@48` |
+| SMC 값 인코딩 | `ui32` LE / `sp78` BE / `flt ` LE, FourCharCode 왕복 | 21개 키 + 101개 퍼센트 값 |
+| 충전 제어 값 의미 | `CH0B`=0x02, `CHTE`=`01000000`, `CHIE`=0x08 등 | 20개 단정 |
+| 배터리 속성 해석 | Apple Silicon·인텔·빈 딕셔너리·이상값 | 323개 케이스 |
+| 설정 정리(`sanitized`) | limit×sail 전수 + 멱등성 | 9,821개 조합 |
+| 정책 엔진 시나리오 | 상한·히스테리시스·온도·캘리브레이션·일시중지 등 | 88개 단정 |
+| **정책 엔진 안전 불변식** | 11개 불변식 × 전수 스윕 | **688,800개 조합** |
+| 백엔드 탐지 | 기기 6종(껍데기 키·폭 불일치 포함) | 41개 단정 |
+| **SMC 쓰기 바이트** | 어떤 값이 어떤 키에 쓰였는지 바이트 단위 | 58개 단정 |
+| 판단 → 하드웨어 매핑 | 기기 6종 × 동작 4가지 × 목표 5가지 | 120개 조합 |
+| 쓰기 멱등성 | 2회차에는 SMC 를 건드리지 않는가 | 100개 조합 |
+| **복구(`restoreDefaults`)** | 도달 가능한 모든 상태에서 충전이 되살아나는가 | 240개 조합 |
+| **폐루프 시뮬레이션** | 실제 정책+실제 적용+가짜 SMC 를 이어서 돌림 | 27,700 tick |
+| 셸 스크립트 / plist | `bash -n`, `plistlib` | — |
+| 전체 Swift 파일 | `swiftc -parse` | 51개 파일 |
 
-정책 엔진에서 검증한 항목: 상한 도달/해제, 히스테리시스 밴드(80→75)의 양쪽 경계,
-온도 보호의 트립·해제 래치, 100% 한 번만 충전의 자동 복귀, 강제 방전의 여유값 경계와
-미지원 기기에서의 폴백, 일시 중지 만료, 캘리브레이션 3단계 전이 전부, 설정 클램프.
+전수 스윕에서 확인하는 안전 불변식(하나라도 깨지면 실패):
 
-리뷰에서 나온 실제 버그로 고친 것들:
+1. 전원이 빠져 있으면 강제 방전하지 않는다
+2. 미지원 기기에서는 SMC 를 건드리지 않는다
+3. 관리를 끄면 절대 개입하지 않는다
+4. 어댑터 제어 능력이 없으면 방전을 시도하지 않는다
+5. 온도 한계를 넘으면 충전을 허용하지 않는다
+6. 재충전 하한 이하면 반드시 충전한다
+7. 상한 이상이면 충전하지 않는다
+8. 목표값은 항상 20~100% 안에 있다
+9. 재충전 하한 ≤ 목표
+10. 같은 입력이면 같은 결정 (결정성)
+11. 결과를 다시 넣어도 결정이 흔들리지 않는다 (진동 없음)
 
-- **배터리 읽기 실패 시 충전 억제가 그대로 남던 문제** (가장 중요했다) — 이제 읽기 실패를
-  "배터리 없음"으로 정책에 흘려보내 충전을 허용한다.
-- 언인스톨의 "안전망"이 읽기 전용 `--check` 였던 문제 → `paprikad --restore` 를 새로 만들어
-  바이너리를 지우기 전에 호출한다.
+### 검증이 실제로 찾아낸 것
+
+하니스가 장식이 아니라는 증거로, 찾아서 고친 것들을 적어둔다.
+
+**폐루프 시뮬레이션이 찾은 실제 버그 — 히스테리시스가 무력화되던 문제**
+
+전원이 빠지면 판단은 항상 `allowCharging(onBattery)` 이다(하드웨어를 허용 상태로
+둬서 다시 꽂는 순간 바로 충전되게 하려고). 그런데 그때 히스테리시스 래치까지 `true`
+로 바꿔버리고 있었다. 결과적으로 **잠깐 들고 나갔다 오는 것만으로** "이미 상한에
+도달했다"는 기억이 지워졌다.
+
+상한 80% / 히스테리시스 10% 로 잠깐 뽑아 74% 까지 쓰고 다시 꽂으면, 70% 아래로
+내려가길 기다려야 하는데 곧바로 80% 까지 다시 충전했다. 사이클을 아끼려고 만든
+기능이 제일 흔한 사용 패턴에서 작동하지 않았던 것이다.
+
+고친 뒤 같은 시뮬레이션(얕은 방전 20회 반복):
+
+```
+충전 시작 21회 → 11회 (48% 감소), 회당 깊이 5.8%p → 11.0%p
+총 충전량은 그대로 — 정상 상태에서 들어간 전하와 나간 전하는 같다.
+히스테리시스가 바꾸는 건 "총량"이 아니라 "횟수"다.
+```
+
+이건 한 번의 판단만 보면 절대 보이지 않는다. 여러 tick 을 이어서 돌려야 드러난다.
+
+**독립 코드 리뷰가 찾은 것들** (모두 수정 완료)
+
+- **배터리 읽기 실패 시 충전 억제가 그대로 남던 문제** (가장 중요했다) — 이제 읽기
+  실패를 "배터리 없음"으로 정책에 흘려보내 충전을 허용한다. 회귀 검사 있음.
+- 언인스톨의 "안전망"이 읽기 전용 `--check` 였던 문제 → `paprikad --restore` 를 새로
+  만들어 바이너리를 지우기 전에 호출한다.
 - `restoreOnShutdown` 토글 제거 (끌 수 있으면 안 되는 안전장치였다).
 - 도우미를 `/usr/local/libexec` → `/Library/PrivilegedHelperTools` 로 이동.
 - `launchctl enable` 이 `bootstrap` **뒤에** 있던 순서 버그.
@@ -285,19 +374,29 @@ log stream --predicate 'subsystem == "com.paprika"' --level info
 
 ### 확인하지 못한 것
 
-- **컴파일**. AppKit·SwiftUI·IOKit·Charts·Security 를 쓰는 코드는 맥이 없으면 타입 검사가
-  불가능하다. 문법은 통과했고 API 시그니처와 macOS 13 가용성은 한 줄씩 대조했지만,
-  처음 `make app` 할 때 오류가 몇 개 나올 가능성은 있다.
-- **실제 SMC 쓰기**. 이건 하드웨어가 있어야만 확인된다. `sudo paprikad --check` 가
-  이 맥에서 어떤 방식이 쓰이는지 알려주는 첫 관문이다.
-- UI 렌더링. 파프리카 모양이 실제로 예쁜지는 봐야 안다. 마음에 안 들면
-  `Sources/Paprika/Views/PepperGeometry.swift` 의 제어점 숫자만 만지면 된다.
+- **컴파일**. AppKit·SwiftUI·IOKit·Charts·Security 를 쓰는 코드는 맥이 없으면 타입
+  검사가 불가능하다. 문법은 통과했고 API 시그니처와 macOS 13 가용성은 한 줄씩
+  대조했지만, 처음 `make app` 할 때 오류가 몇 개 나올 가능성은 있다.
+- **실제 SMC 쓰기**. 가짜 SMC 는 "내가 이해한 규칙"을 재현한 것이다. 그 이해 자체가
+  틀렸다면 하니스는 통과하면서 실제 기기에서만 틀린다. 기기에서 확인하는 방법:
 
-### 테스트 타깃이 없는 이유
+  ```bash
+  sudo /Library/PrivilegedHelperTools/com.paprika.helperd --check   # 어떤 방식이 쓰이는지
+  paprikactl status    # "하드웨어" 줄이 판단과 일치하는지
+  paprikactl smc       # 키가 실제로 기대한 값인지
+  ```
 
-위 검증들은 저장소 밖 임시 하니스에서 돌렸다. `Package.swift` 에 테스트 타깃으로
-넣어둘 수도 있는데, 그러면 정책 엔진·`BatteryReader.parse`·`SMCValue`·ABI 레이아웃을
-`swift test` 로 상시 돌릴 수 있다. 원하면 말해달라 — 바로 넣는다.
+- UI 렌더링, XPC 연결, launchd 등록. 파프리카 모양이 예쁜지도 봐야 안다. 마음에 안
+  들면 `Sources/Paprika/Views/PepperGeometry.swift` 의 제어점 숫자만 만지면 된다.
+
+### 테스트 타깃이 아니라 하니스인 이유
+
+`swift test` 로 돌리는 XCTest 타깃은 `PaprikaKit` 전체를 컴파일해야 하고, 그 안에는
+IOKit 을 쓰는 파일이 있어서 리눅스에서는 빌드되지 않는다. 즉 **내가 실행해서 확인할
+수 없는 테스트**가 된다.
+
+그래서 플랫폼 독립 소스만 모아 컴파일하는 독립 실행 하니스로 만들었다. 덕분에 맥에서도
+리눅스에서도 같은 명령으로 돌아가고, 위 숫자는 내가 실제로 실행해서 얻은 것이다.
 
 ---
 

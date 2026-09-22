@@ -102,13 +102,15 @@ public struct FirmwareChargeLimit: Equatable, Codable, Sendable {
 // MARK: - 하드웨어 래퍼
 
 public final class ChargeHardware {
-    private let smc: SMCConnection
+    /// 구체적인 SMCConnection 이 아니라 프로토콜에 의존한다.
+    /// 덕분에 검증 하니스가 가짜 SMC 를 끼워 이 클래스를 그대로 돌릴 수 있다.
+    private let smc: any SMCAccess
     public private(set) var capabilities: HardwareCapabilities
 
     /// 선택된 백엔드를 강제로 덮어쓰고 싶을 때 사용(설정의 "제어 방식" 항목).
     private var forcedBackend: ChargeControlBackend?
 
-    public init(smc: SMCConnection, forcedBackend: ChargeControlBackend? = nil) {
+    public init(smc: any SMCAccess, forcedBackend: ChargeControlBackend? = nil) {
         self.smc = smc
         self.forcedBackend = forcedBackend
         self.capabilities = HardwareCapabilities()
@@ -436,7 +438,7 @@ public final class ChargeHardware {
         var entries: [SMCDumpEntry] = []
         let keys: [String]
         if includeAllKeys {
-            let all = smc.allKeyNames()
+            let all = smc.allKeyNames(limit: 4096)
             keys = all.isEmpty ? SMCKeys.diagnosticKeys : all
         } else {
             keys = SMCKeys.diagnosticKeys
