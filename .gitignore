@@ -1,0 +1,11 @@
+.DS_Store
+.build/
+build/
+dist/
+*.xcodeproj
+*.xcworkspace
+.swiftpm/
+Package.resolved
+Paprika.app/
+*.icns
+Paprika.iconset/
