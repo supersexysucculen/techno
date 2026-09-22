@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.paprika.helperd</string>
+
+	<!-- /usr/local 은 Homebrew 가 설치된 맥에서 root:admin 775 라서, 관리자 계정이
+	     root 로 실행될 바이너리를 갈아치울 수 있다. /Library 는 그렇지 않다. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Library/PrivilegedHelperTools/com.paprika.helperd</string>
+	</array>
+
+	<!-- 메뉴바 앱이 XPC 로 붙는 이름. -->
+	<key>MachServices</key>
+	<dict>
+		<key>com.paprika.helperd</key>
+		<true/>
+	</dict>
+
+	<!-- 부팅 직후부터 충전 제한이 걸려 있어야 하므로 바로 띄운다.
+	     (메뉴바 앱이 실행 중인지와 무관하게 동작한다) -->
+	<key>RunAtLoad</key>
+	<true/>
+
+	<!-- 비정상 종료(크래시)면 되살리고, 스스로 정상 종료한 경우엔 그대로 둔다.
+	     언인스톨/복구 흐름이 launchd 와 싸우지 않도록 하는 설정이다. -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+
+	<key>ProcessType</key>
+	<string>Background</string>
+
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<key>StandardOutPath</key>
+	<string>/var/log/paprikad.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/paprikad.log</string>
+</dict>
+</plist>

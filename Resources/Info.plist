@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>ko</string>
+	<key>CFBundleDisplayName</key>
+	<string>Paprika</string>
+	<key>CFBundleExecutable</key>
+	<string>Paprika</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.paprika.Paprika</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Paprika</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__BUILD__</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<!-- 메뉴바 전용 앱: Dock 아이콘과 앱 메뉴를 만들지 않는다. -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>개인용. 자유롭게 고쳐 쓰세요.</string>
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
+	<!-- 한국어/영어는 코드 안에서 직접 고르지만, OS 에 지원 언어를 알려준다. -->
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>ko</string>
+		<string>en</string>
+	</array>
+</dict>
+</plist>
